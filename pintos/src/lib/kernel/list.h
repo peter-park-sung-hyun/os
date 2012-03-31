@@ -57,7 +57,6 @@
        empty list.  Returned by list_front().
 
      - "back": The last element in a list.  Undefined in an empty
-       list.  Returned by list_back().
 
      - "tail": The element figuratively just after the last
        element of a list.  Well defined even in an empty list.

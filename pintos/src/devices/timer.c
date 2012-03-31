@@ -20,6 +20,9 @@
 /* Number of timer ticks since OS booted. */
 static int64_t ticks;
 
+/*  list for wait queue  */
+static struct list wait_list;
+
 /* Number of loops per timer tick.
    Initialized by timer_calibrate(). */
 static unsigned loops_per_tick;
@@ -30,12 +33,17 @@ static void busy_wait (int64_t loops);
 static void real_time_sleep (int64_t num, int32_t denom);
 static void real_time_delay (int64_t num, int32_t denom);
 
+static bool less_comp (struct list_elem *, struct list_elem *, void *aux);
+
 /* Sets up the 8254 Programmable Interval Timer (PIT) to
    interrupt PIT_FREQ times per second, and registers the
    corresponding interrupt. */
 void
 timer_init (void) 
 {
+
+  /* wait queue initialization */
+  list_init (&wait_list);
   /* 8254 input frequency divided by TIMER_FREQ, rounded to
      nearest. */
   uint16_t count = (1193180 + TIMER_FREQ / 2) / TIMER_FREQ;
@@ -99,10 +107,39 @@ void
 timer_sleep (int64_t ticks) 
 {
   int64_t start = timer_ticks ();
-
+  
   ASSERT (intr_get_level () == INTR_ON);
-  while (timer_elapsed (start) < ticks) 
-    thread_yield ();
+  
+  thread_sleep(start + ticks);
+  //while (timer_elapsed (start) < ticks) 
+  //  thread_yield ();
+}
+
+static bool 
+less_comp (struct list_elem *a, struct list_elem *b, void *aux UNUSED)
+{
+  struct thread *t_a = list_entry(a, struct thread, elem);
+  struct thread *t_b = list_entry(b, struct thread, elem);
+  if(t_a->wake_ticks < t_b->wake_ticks){
+    return true;
+  }else if(t_a->wake_ticks == t_b->wake_ticks){
+    return (t_a->priority >= t_b->priority)? true: false;
+  }else{
+    return false;
+  }
+}
+
+/*
+    put a running thread to wait queue.
+*/
+void thread_sleep(int64_t wake_ticks){
+    struct thread* current_thread = thread_current();
+    enum intr_level old_level = intr_disable();
+    current_thread->wake_ticks = wake_ticks;
+    //make ordered wait queue
+    list_insert_ordered(&wait_list, &current_thread->elem, less_comp, NULL);
+	thread_block();
+    intr_set_level(old_level);
 }
 
 /* Sleeps for approximately MS milliseconds.  Interrupts must be
@@ -174,12 +211,25 @@ timer_print_stats (void)
 {
   printf ("Timer: %"PRId64" ticks\n", timer_ticks ());
 }
-
+
 /* Timer interrupt handler. */
 static void
 timer_interrupt (struct intr_frame *args UNUSED)
 {
   ticks++;
+  
+  /* wake up thread in wait_list if it's ticks expired */
+  struct thread* first_thread;
+  while(!list_empty(&wait_list)){
+    first_thread = list_entry(list_front(&wait_list), struct thread, elem);
+	if (ticks >= first_thread->wake_ticks)
+    {
+	  list_pop_front(&wait_list);
+ 	  thread_unblock(first_thread);
+    }else{
+      break;
+	}
+  }
   thread_tick ();
 }
 
